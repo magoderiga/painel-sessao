@@ -136,3 +136,13 @@ test('store antigo (mcpDesligados) e ignorado: nada ligado por engano', async ($
   expect((await ui.find({ key: 'contexto' }))?.text).toBe('Contexto 2/2 ▾')
   await ui.unmount()
 })
+
+test('ferramentas internas do app nunca sao bloqueadas', async ($, on) => {
+  await comecar($, on)
+  // Tudo desligado: ainda assim ccd_*, autoria de mods e navegador passam.
+  const alvos = ['mcp__ccd_turn__wrap_up', 'mcp__ccd_session__start_session', 'mcp__plugin-authoring__scan_secrets', 'mcp__Claude_Browser__navigate']
+  for (const t of alvos) {
+    expect((await $.tool.describe({ tool: t, description: 'x' })).isDeferred).toBeUndefined()
+    expect((await $.tool.call({ tool: t })).deny).toBeUndefined()
+  }
+})

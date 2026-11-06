@@ -21,8 +21,16 @@ const catalogo = atom({ plugin: 'painel-sessao', key: 'catalogo' } as const, {
 } as Catalogo)
 const ultimaResposta = atom({ plugin: 'painel-sessao', key: 'ultimaResposta' } as const, '')
 
-const servidorDe = (tool: string): string | null =>
-  tool.startsWith('mcp__') ? tool.slice(5).split('__')[0] ?? null : null
+// Infra do proprio app e do dev de mods: nunca entra no painel nem e bloqueada,
+// senao o mod derrubaria ferramentas internas (ccd_*, autoria de mods, navegador).
+const INFRA = ['ccd_', 'plugin-authoring', 'Claude_Browser', 'remote-devices', 'computer-use', 'visualize', 'terminal']
+const ehInfra = (s: string): boolean => INFRA.some(p => s === p || s.startsWith(p))
+
+const servidorDe = (tool: string): string | null => {
+  if (!tool.startsWith('mcp__')) return null
+  const s = tool.slice(5).split('__')[0] ?? null
+  return s && !ehInfra(s) ? s : null
+}
 
 const SKILLS_OCULTAS = new Set(['l', 'l-0', 'painel'])
 const GRUPO_MEUS = 'Minhas'
