@@ -1,9 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
-import type { Aba, Catalogo, Config, SkillInfo } from '../types'
+import type { Catalogo, Config, SkillInfo } from '../types'
 
 const STORE_KEY = 'config'
+const PANE = 'painel-sessao'
+const TITULO = 'Painel de sessão'
 
 // Sessao nova comeca com tudo desligado: voce liga so o que vai usar.
 const PADRAO: Config = { memoria: false, claudeMd: false, mcpLigados: [], voz: false, velocidade: 1 }
@@ -13,8 +15,7 @@ const VELOCIDADES = [0.8, 1, 1.2, 1.5]
 const config = atom({ plugin: 'painel-sessao', key: 'config' } as const, PADRAO, { shape: 'config-3' })
 // So desta sessao: skills marcadas para o proximo pedido.
 const skills = atom({ plugin: 'painel-sessao', key: 'skills' } as const, [] as string[])
-const aba = atom({ plugin: 'painel-sessao', key: 'aba' } as const, 'fechado' as Aba)
-const grupoSkills = atom({ plugin: 'painel-sessao', key: 'grupoSkills' } as const, '')
+const oculto = atom({ plugin: 'painel-sessao', key: 'oculto' } as const, false)
 const catalogo = atom({ plugin: 'painel-sessao', key: 'catalogo' } as const, {
   servidores: [],
   skills: [],
@@ -77,13 +78,59 @@ function grupoDe(c: { source: string; plugin?: string }): string {
   return c.source
 }
 
-type Item = { key: string; nome: string; marcado: boolean; onPress: () => unknown }
+// Os servidores MCP conectam depois do session.start: a lista e refeita a cada
+// consulta e tambem cresce pelo tool.describe, que dispara ferramenta a ferramenta.
+async function atualizarCatalogo($: EngineInterface) {
+  const tools = await $.tool.list()
+  const vistos = tools.map(t => servidorDe(t.name)).filter((s): s is string => !!s)
+  await update($, catalogo, atual => ({
+    ...atual,
+    servidores: [...new Set([...atual.servidores, ...vistos])].sort(),
+  }))
+}
 
-function colunas<T>(lista: T[], n: number): T[][] {
-  const porColuna = Math.ceil(lista.length / n) || 1
-  const saida: T[][] = []
-  for (let i = 0; i < lista.length; i += porColuna) saida.push(lista.slice(i, i + porColuna))
-  return saida
+async function abrirPainel($: EngineInterface) {
+  await atualizarCatalogo($)
+  await $.ui.open({ id: PANE, title: TITULO })
+}
+
+// Acoes compartilhadas pela faixa e pelo painel.
+function acoes($: EngineInterface, c: Config) {
+  return {
+  alternarMemoria: async () => {
+    await salvar($, x => ({ ...x, memoria: !x.memoria }))
+    $.ui.invalidate('prompt.section')
+  },
+  alternarClaudeMd: async () => {
+    await salvar($, x => ({ ...x, claudeMd: !x.claudeMd }))
+    $.ui.invalidate('prompt.context')
+  },
+  definirServidores: async (lista: string[]) => {
+    await salvar($, x => ({ ...x, mcpLigados: lista }))
+    $.ui.invalidate('tool.describe')
+  },
+  alternarAuto: async () => {
+    const novo = await salvar($, x => ({ ...x, voz: !x.voz }))
+    if (!novo.voz) void parar($)
+    else $.ui.toast('Leitura automatica ligada: cada resposta nova sera lida.')
+  },
+  lerCaixa: async () => {
+    const { text } = await $.prompt.read()
+    if (!text.trim()) {
+      $.ui.toast('Cole na caixa o trecho que quer ouvir e clique de novo.')
+      return
+    }
+    void falar($, text, c.velocidade)
+  },
+  lerUltima: async () => {
+    const ultima = await read($, ultimaResposta)
+    if (!ultima.trim()) {
+      $.ui.toast('Ainda nao ha resposta nesta sessao.')
+      return
+    }
+    void falar($, ultima, c.velocidade)
+  },
+}
 }
 
 export const register: Register = on => {
@@ -101,30 +148,30 @@ export const register: Register = on => {
       }))
     }
 
-    const tools = await $.tool.list()
-    const servidores = [...new Set(tools.map(t => servidorDe(t.name)).filter((s): s is string => !!s))].sort()
-
     const comandos = await $.command.list()
     const lista: SkillInfo[] = comandos
       .filter(c => c.source !== 'builtin' && c.source !== 'mcp' && !SKILLS_OCULTAS.has(c.name))
       .map(c => ({ name: c.name, description: c.description, grupo: grupoDe(c) }))
-      .sort((a, b) => a.grupo.localeCompare(b.grupo) || a.name.localeCompare(b.name))
-
-    await update($, catalogo, () => ({ servidores, skills: lista }))
-    await update($, grupoSkills, atual => atual || (lista.some(s => s.grupo === GRUPO_MEUS) ? GRUPO_MEUS : lista[0]?.grupo ?? ''))
+      .sort((a, b) => {
+        const pa = a.grupo === GRUPO_MEUS ? 0 : 1
+        const pb = b.grupo === GRUPO_MEUS ? 0 : 1
+        return pa - pb || a.grupo.localeCompare(b.grupo) || a.name.localeCompare(b.name)
+      })
+    await update($, catalogo, atual => ({ ...atual, skills: lista }))
+    await atualizarCatalogo($)
 
     await $.command.register({
       name: 'painel',
-      description: 'Mostra/oculta a faixa do painel de sessao acima do prompt',
+      description: 'Abre o painel de sessao (contexto, MCP, skills, voz)',
     })
 
     return next(e)
   })
 
   on('command.run', { command: 'painel' }, async $ => {
-    const atual = await read($, aba)
-    await update($, aba, () => (atual === 'oculto' ? 'fechado' : 'oculto'))
-    return { text: atual === 'oculto' ? 'Painel visivel.' : 'Painel oculto.' }
+    await update($, oculto, () => false)
+    await abrirPainel($)
+    return { text: 'Painel de sessao aberto.' }
   })
 
   // Memoria automatica: secao "memory" do system prompt.
@@ -144,6 +191,10 @@ export const register: Register = on => {
   on('tool.describe', async ($, e, next) => {
     const s = servidorDe(e.tool)
     if (!s) return next(e)
+    const cat = await read($, catalogo)
+    if (!cat.servidores.includes(s)) {
+      await update($, catalogo, atual => ({ ...atual, servidores: [...new Set([...atual.servidores, s])].sort() }))
+    }
     const c = await read($, config)
     if (c.mcpLigados.includes(s)) return next(e)
     return { description: e.description, isDeferred: true }
@@ -155,7 +206,7 @@ export const register: Register = on => {
     if (!s) return next(e)
     const c = await read($, config)
     if (c.mcpLigados.includes(s)) return next(e)
-    return { deny: `Servidor MCP "${s}" esta desligado no painel de sessao (ligue-o na faixa acima do prompt).` }
+    return { deny: `Servidor MCP "${s}" esta desligado no painel de sessao (ligue-o na faixa acima do prompt ou em /painel).` }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: 'painel-sessao: falha ao avaliar o servidor' }))
 
   // Skills marcadas entram como instrucao no inicio do pedido.
@@ -181,15 +232,15 @@ export const register: Register = on => {
     return r
   })
 
+  // Faixa: UMA linha de controles rapidos. Listas ficam no painel lateral.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const estado = await read($, aba)
     const { Box, Button, Text } = $.ui.resolve(e)
 
-    if (estado === 'oculto') {
+    if (await read($, oculto)) {
       return (
         <Box>
-          <Button key="mostrar" label="Painel" plain dimColor onPress={() => update($, aba, () => 'fechado')} />
+          <Button key="mostrar" label="Painel" plain dimColor onPress={() => update($, oculto, () => false)} />
         </Box>
       )
     }
@@ -197,189 +248,106 @@ export const register: Register = on => {
     const c = await read($, config)
     const marcadas = await read($, skills)
     const cat = await read($, catalogo)
-    const grupo = await read($, grupoSkills)
-    const nCols = e.surface === 'desktop' ? 4 : e.surface === 'terminal' ? 3 : 2
-    const seta = (qual: Aba) => (estado === qual ? '▴' : '▾')
-
-    const alternarMemoria = async () => {
-      await salvar($, x => ({ ...x, memoria: !x.memoria }))
-      $.ui.invalidate('prompt.section')
-    }
-    const alternarClaudeMd = async () => {
-      await salvar($, x => ({ ...x, claudeMd: !x.claudeMd }))
-      $.ui.invalidate('prompt.context')
-    }
-    const definirServidores = async (lista: string[]) => {
-      await salvar($, x => ({ ...x, mcpLigados: lista }))
-      $.ui.invalidate('tool.describe')
-    }
-    const alternarServidor = (s: string) =>
-      definirServidores(c.mcpLigados.includes(s) ? c.mcpLigados.filter(n => n !== s) : [...c.mcpLigados, s])
-    const alternarSkill = (n: string) =>
-      update($, skills, lista => (lista.includes(n) ? lista.filter(x => x !== n) : [...lista, n]))
-    const alternarAuto = async () => {
-      const novo = await salvar($, x => ({ ...x, voz: !x.voz }))
-      if (!novo.voz) void parar($)
-      else $.ui.toast('Leitura automatica ligada: cada resposta nova sera lida.')
-    }
-    const lerCaixa = async () => {
-      const { text } = await $.prompt.read()
-      if (!text.trim()) {
-        $.ui.toast('Cole na caixa o trecho que quer ouvir e clique de novo.')
-        return
-      }
-      void falar($, text, c.velocidade)
-    }
-    const lerUltima = async () => {
-      const ultima = await read($, ultimaResposta)
-      if (!ultima.trim()) {
-        $.ui.toast('Ainda nao ha resposta nesta sessao.')
-        return
-      }
-      void falar($, ultima, c.velocidade)
-    }
-    const definirVelocidade = (v: number) => salvar($, x => ({ ...x, velocidade: v }))
-    const abrir = (qual: Aba) => update($, aba, atual => (atual === qual ? 'fechado' : qual))
-
-    const ligadosCtx = Number(c.memoria) + Number(c.claudeMd)
+    const a = acoes($, c)
     const ligadosMcp = c.mcpLigados.filter(s => cat.servidores.includes(s)).length
-    const grupos = [...new Set(cat.skills.map(s => s.grupo))]
-    const skillsDoGrupo = cat.skills.filter(s => s.grupo === grupo)
-
-    // Grade: colunas alinhadas, botoes sem moldura; marcado em cor cheia, resto esmaecido.
-    const grade = (itens: Item[]) => (
-      <Box flexDirection="row" columnGap={3}>
-        {colunas(itens, nCols).map((col, ci) => {
-          const largura = Math.max(...col.map(i => i.nome.length))
-          return (
-            <Box key={`col${ci}`} flexDirection="column">
-              {col.map(i => (
-                <Button
-                  key={i.key}
-                  plain
-                  dimColor={!i.marcado}
-                  label={`${i.marcado ? '●' : '○'} ${i.nome.padEnd(largura)}`}
-                  onPress={i.onPress}
-                />
-              ))}
-            </Box>
-          )
-        })}
-      </Box>
-    )
-
-    const secao = (titulo: string, filho: RenderChildren, rodape?: RenderChildren) => (
-      <Box flexDirection="column" paddingLeft={1} paddingY={0} borderStyle="single" borderDimColor>
-        <Text dimColor>{titulo}</Text>
-        {filho}
-        {rodape}
-      </Box>
-    )
 
     return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
-          <Text dimColor>Painel</Text>
-          <Button key="contexto" label={`Contexto ${ligadosCtx}/2 ${seta('contexto')}`} onPress={() => abrir('contexto')} />
-          <Button key="mcp" label={`MCP ${ligadosMcp}/${cat.servidores.length} ${seta('mcp')}`} onPress={() => abrir('mcp')} />
-          <Button key="skills" label={`Skills ${marcadas.length}/${cat.skills.length} ${seta('skills')}`} onPress={() => abrir('skills')} />
-          <Button key="voz" label={`${c.voz ? '🔊' : '🔇'} Voz ${seta('voz')}`} onPress={() => abrir('voz')} />
-          <Button key="ocultar" label="×" plain dimColor role="dismiss" onPress={() => update($, aba, () => 'oculto')} />
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
+        <Button key="abrir" label="Painel" plain dimColor onPress={() => abrirPainel($)} />
+        <Text dimColor>│</Text>
+        <Button key="memoria" plain dimColor={!c.memoria} label={`${c.memoria ? '●' : '○'} Memória`} onPress={a.alternarMemoria} />
+        <Button key="claudemd" plain dimColor={!c.claudeMd} label={`${c.claudeMd ? '●' : '○'} CLAUDE.md`} onPress={a.alternarClaudeMd} />
+        <Text dimColor>│</Text>
+        <Button key="mcp" plain dimColor={ligadosMcp === 0} label={`MCP ${ligadosMcp}/${cat.servidores.length}`} onPress={() => abrirPainel($)} />
+        <Button key="skills" plain dimColor={marcadas.length === 0} label={`Skills ${marcadas.length}/${cat.skills.length}`} onPress={() => abrirPainel($)} />
+        <Text dimColor>│</Text>
+        <Button key="voz:auto" plain dimColor={!c.voz} label={`${c.voz ? '🔊' : '🔇'} Auto`} onPress={a.alternarAuto} />
+        <Button key="voz:caixa" plain label="▶ Ler caixa" onPress={a.lerCaixa} />
+        <Button key="voz:parar" plain dimColor label="■" onPress={() => parar($)} />
+        <Button key="ocultar" label="×" plain dimColor role="dismiss" onPress={() => update($, oculto, () => true)} />
+      </Box>
+    )
+  })
+
+  // Painel lateral: listas completas, um item por linha, rolagem do proprio app.
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const c = await read($, config)
+    const marcadas = await read($, skills)
+    const cat = await read($, catalogo)
+    const a = acoes($, c)
+
+    const alternarServidor = (s: string) =>
+      a.definirServidores(c.mcpLigados.includes(s) ? c.mcpLigados.filter(n => n !== s) : [...c.mcpLigados, s])
+    const alternarSkill = (n: string) =>
+      update($, skills, lista => (lista.includes(n) ? lista.filter(x => x !== n) : [...lista, n]))
+
+    const item = (key: string, nome: string, marcado: boolean, onPress: () => unknown) => (
+      <Button key={key} plain dimColor={!marcado} label={`${marcado ? '●' : '○'} ${nome}`} onPress={onPress} />
+    )
+    const titulo = (texto: string) => (
+      <Box marginTop={1}>
+        <Text bold>{texto}</Text>
+      </Box>
+    )
+
+    const grupos = [...new Set(cat.skills.map(s => s.grupo))]
+
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        {titulo('Contexto enviado ao modelo')}
+        {item('memoria', 'Memória automática', c.memoria, a.alternarMemoria)}
+        {item('claudemd', 'CLAUDE.md e regras', c.claudeMd, a.alternarClaudeMd)}
+
+        {titulo(`Servidores MCP  ${c.mcpLigados.filter(s => cat.servidores.includes(s)).length}/${cat.servidores.length}`)}
+        <Text dimColor>desligado = schema fora do prompt e chamadas negadas</Text>
+        {cat.servidores.length === 0 && <Text dimColor>nenhum servidor conectado ainda</Text>}
+        {cat.servidores.map(s => item(`mcp:${s}`, s, c.mcpLigados.includes(s), () => alternarServidor(s)))}
+        {cat.servidores.length > 0 && (
+          <Box flexDirection="row" columnGap={2}>
+            <Button key="mcp:todos" plain dimColor label="ligar todos" onPress={() => a.definirServidores([...cat.servidores])} />
+            <Button key="mcp:nenhum" plain dimColor label="desligar todos" onPress={() => a.definirServidores([])} />
+            <Button key="mcp:atualizar" plain dimColor label="atualizar lista" onPress={() => atualizarCatalogo($)} />
+          </Box>
+        )}
+
+        {titulo(`Skills  ${marcadas.length}/${cat.skills.length}`)}
+        <Text dimColor>marcadas entram como instrucao no proximo pedido</Text>
+        {marcadas.length > 0 && (
+          <Box flexDirection="row" columnGap={1}>
+            <Text>{marcadas.join(', ')}</Text>
+            <Button key="limpar" plain dimColor label="limpar" onPress={() => update($, skills, () => [])} />
+          </Box>
+        )}
+        {cat.skills.length === 0 && <Text dimColor>nenhuma skill encontrada</Text>}
+        {grupos.map(g => (
+          <Box key={`grupo:${g}`} flexDirection="column">
+            <Box marginTop={1}>
+              <Text dimColor>{g}</Text>
+            </Box>
+            {cat.skills
+              .filter(s => s.grupo === g)
+              .map(s => item(`skill:${s.name}`, s.name, marcadas.includes(s.name), () => alternarSkill(s.name)))}
+          </Box>
+        ))}
+
+        {titulo('Leitura em voz alta')}
+        {item('voz:auto', 'Ler cada resposta nova', c.voz, a.alternarAuto)}
+        <Button key="voz:caixa" plain label="▶ Ler o que está na caixa (cole o trecho e clique)" onPress={a.lerCaixa} />
+        <Button key="voz:ultima" plain label="▶ Ler a última resposta" onPress={a.lerUltima} />
+        <Button key="voz:parar" plain label="■ Parar" onPress={() => parar($)} />
+        <Box flexDirection="row" columnGap={2} marginTop={1}>
+          <Text dimColor>Velocidade</Text>
+          {VELOCIDADES.map(v => (
+            <Button
+              key={`vel:${v}`}
+              plain
+              dimColor={v !== c.velocidade}
+              label={`${v === c.velocidade ? '●' : '○'} ${v.toFixed(1)}x`}
+              onPress={() => salvar($, x => ({ ...x, velocidade: v }))}
+            />
+          ))}
         </Box>
-
-        {estado === 'contexto' &&
-          secao(
-            'Contexto enviado ao modelo',
-            grade([
-              { key: 'memoria', nome: 'Memória automática', marcado: c.memoria, onPress: alternarMemoria },
-              { key: 'claudemd', nome: 'CLAUDE.md e regras', marcado: c.claudeMd, onPress: alternarClaudeMd },
-            ]),
-          )}
-
-        {estado === 'mcp' &&
-          secao(
-            'Servidores MCP (desligado = schema fora do prompt e chamadas negadas)',
-            cat.servidores.length === 0 ? (
-              <Text dimColor>nenhum servidor conectado</Text>
-            ) : (
-              grade(
-                cat.servidores.map(s => ({
-                  key: `mcp:${s}`,
-                  nome: s,
-                  marcado: c.mcpLigados.includes(s),
-                  onPress: () => alternarServidor(s),
-                })),
-              )
-            ),
-            cat.servidores.length > 0 && (
-              <Box flexDirection="row" columnGap={2}>
-                <Button key="mcp:todos" plain dimColor label="ligar todos" onPress={() => definirServidores([...cat.servidores])} />
-                <Button key="mcp:nenhum" plain dimColor label="desligar todos" onPress={() => definirServidores([])} />
-              </Box>
-            ),
-          )}
-
-        {estado === 'skills' &&
-          secao(
-            'Skills marcadas entram no próximo pedido',
-            <Box flexDirection="column">
-              <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-                {grupos.map(g => (
-                  <Button
-                    key={`grupo:${g}`}
-                    plain
-                    dimColor={g !== grupo}
-                    label={`${g === grupo ? '▸' : ' '} ${g}`}
-                    onPress={() => update($, grupoSkills, () => g)}
-                  />
-                ))}
-              </Box>
-              {cat.skills.length === 0 ? (
-                <Text dimColor>nenhuma skill encontrada</Text>
-              ) : (
-                grade(
-                  skillsDoGrupo.map(s => ({
-                    key: `skill:${s.name}`,
-                    nome: s.name,
-                    marcado: marcadas.includes(s.name),
-                    onPress: () => alternarSkill(s.name),
-                  })),
-                )
-              )}
-            </Box>,
-            marcadas.length > 0 && (
-              <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-                <Text dimColor>Marcadas:</Text>
-                <Text>{marcadas.join(', ')}</Text>
-                <Button key="limpar" plain dimColor label="limpar" onPress={() => update($, skills, () => [])} />
-              </Box>
-            ),
-          )}
-
-        {estado === 'voz' &&
-          secao(
-            'Leitura em voz alta',
-            <Box flexDirection="column">
-              <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
-                <Button key="voz:auto" plain dimColor={!c.voz} label={`${c.voz ? '●' : '○'} Ler cada resposta nova`} onPress={alternarAuto} />
-                <Button key="voz:caixa" plain label="▶ Ler o que está na caixa" onPress={lerCaixa} />
-                <Button key="voz:ultima" plain label="▶ Ler a última resposta" onPress={lerUltima} />
-                <Button key="voz:parar" plain label="■ Parar" onPress={() => parar($)} />
-              </Box>
-              <Box flexDirection="row" columnGap={2}>
-                <Text dimColor>Velocidade:</Text>
-                {VELOCIDADES.map(v => (
-                  <Button
-                    key={`vel:${v}`}
-                    plain
-                    dimColor={v !== c.velocidade}
-                    label={`${v === c.velocidade ? '●' : '○'} ${v.toFixed(1)}x`}
-                    onPress={() => definirVelocidade(v)}
-                  />
-                ))}
-              </Box>
-            </Box>,
-          )}
       </Box>
     )
   })

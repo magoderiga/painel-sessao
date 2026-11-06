@@ -10,15 +10,12 @@ export type SkillInfo = { name: string; description: string; grupo: string }
 
 export type Catalogo = { servidores: string[]; skills: SkillInfo[] }
 
-export type Aba = 'fechado' | 'contexto' | 'mcp' | 'skills' | 'voz' | 'oculto'
-
 declare module 'claude-code' {
   interface PluginState {
     'painel-sessao': {
       config: Shaped<Config>
       skills: string[]
-      aba: Aba
-      grupoSkills: string
+      oculto: boolean
       catalogo: Catalogo
       ultimaResposta: string
     }
