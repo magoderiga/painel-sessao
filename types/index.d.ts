@@ -3,13 +3,14 @@ export type Config = {
   claudeMd: boolean
   mcpLigados: string[]
   voz: boolean
+  velocidade: number
 }
 
 export type SkillInfo = { name: string; description: string; grupo: string }
 
 export type Catalogo = { servidores: string[]; skills: SkillInfo[] }
 
-export type Aba = 'fechado' | 'contexto' | 'mcp' | 'skills' | 'oculto'
+export type Aba = 'fechado' | 'contexto' | 'mcp' | 'skills' | 'voz' | 'oculto'
 
 declare module 'claude-code' {
   interface PluginState {
