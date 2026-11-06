@@ -1,0 +1,10 @@
+{
+  "name": "painel-sessao",
+  "version": "0.1.0",
+  "description": "Faixa acima do prompt para ligar/desligar memoria, CLAUDE.md, servidores MCP, skills e leitura em voz alta",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "domfantoch"
+  },
+  "license": "MIT"
+}

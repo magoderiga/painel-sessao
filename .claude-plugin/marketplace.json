@@ -1,0 +1,7 @@
+{
+  "name": "painel-sessao",
+  "owner": { "name": "magoderiga" },
+  "plugins": [
+    { "name": "painel-sessao", "source": "./", "description": "Faixa acima do prompt para ligar/desligar memoria, CLAUDE.md, servidores MCP, skills e leitura em voz alta" }
+  ]
+}
