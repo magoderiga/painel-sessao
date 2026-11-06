@@ -8,11 +8,18 @@ const PANE = 'painel-sessao'
 const TITULO = 'Painel de sessão'
 
 // Sessao nova comeca com tudo desligado: voce liga so o que vai usar.
-const PADRAO: Config = { memoria: false, claudeMd: false, mcpLigados: [], voz: false, velocidade: 1 }
+// Vozes pt-BR fixas. A "Multilingual" detecta idioma por trecho e escorrega para espanhol.
+const VOZES: { id: string; nome: string }[] = [
+  { id: 'pt-BR-FranciscaNeural', nome: 'Francisca' },
+  { id: 'pt-BR-AntonioNeural', nome: 'Antonio' },
+  { id: 'pt-BR-ThalitaMultilingualNeural', nome: 'Thalita (multilíngue)' },
+]
+const VOZ_PADRAO = VOZES[0]!.id
+const PADRAO: Config = { memoria: false, claudeMd: false, mcpLigados: [], voz: false, velocidade: 1, vozNome: VOZ_PADRAO }
 const VELOCIDADES = [0.8, 1, 1.2, 1.5]
 
 // Persistido em $.store (entre sessoes); o atom e o espelho lido pelos hooks.
-const config = atom({ plugin: 'painel-sessao', key: 'config' } as const, PADRAO, { shape: 'config-3' })
+const config = atom({ plugin: 'painel-sessao', key: 'config' } as const, PADRAO, { shape: 'config-4' })
 // So desta sessao: skills marcadas para o proximo pedido.
 const skills = atom({ plugin: 'painel-sessao', key: 'skills' } as const, [] as string[])
 const oculto = atom({ plugin: 'painel-sessao', key: 'oculto' } as const, false)
@@ -51,10 +58,10 @@ function scriptVoz($: EngineInterface): string {
   return `${$.plugin.root}/scripts/falar_fila.py`
 }
 
-async function falar($: EngineInterface, texto: string, velocidade: number) {
+async function falar($: EngineInterface, texto: string, velocidade: number, vozNome: string) {
   if (!texto.trim()) return
   try {
-    const r = await $.process.run(['python', scriptVoz($), 'falar', '--rate', rateDe(velocidade)], {
+    const r = await $.process.run(['python', scriptVoz($), 'falar', '--rate', rateDe(velocidade), '--voz', vozNome], {
       stdin: texto,
       timeoutMs: 30000,
     })
@@ -120,7 +127,7 @@ function acoes($: EngineInterface, c: Config) {
       $.ui.toast('Cole na caixa o trecho que quer ouvir e clique de novo.')
       return
     }
-    void falar($, text, c.velocidade)
+    void falar($, text, c.velocidade, c.vozNome)
   },
   lerUltima: async () => {
     const ultima = await read($, ultimaResposta)
@@ -128,7 +135,7 @@ function acoes($: EngineInterface, c: Config) {
       $.ui.toast('Ainda nao ha resposta nesta sessao.')
       return
     }
-    void falar($, ultima, c.velocidade)
+    void falar($, ultima, c.velocidade, c.vozNome)
   },
 }
 }
@@ -144,6 +151,7 @@ export const register: Register = on => {
         claudeMd: salvo.claudeMd === true,
         voz: salvo.voz === true,
         velocidade: VELOCIDADES.includes(v) ? v : 1,
+        vozNome: VOZES.some(z => z.id === salvo.vozNome) ? String(salvo.vozNome) : VOZ_PADRAO,
         mcpLigados: Array.isArray(salvo.mcpLigados) ? salvo.mcpLigados.filter(s => typeof s === 'string') : [],
       }))
     }
@@ -228,7 +236,7 @@ export const register: Register = on => {
     if (!resposta.trim()) return r
     await update($, ultimaResposta, () => resposta)
     const c = await read($, config)
-    if (c.voz) void falar($, resposta, c.velocidade)
+    if (c.voz) void falar($, resposta, c.velocidade, c.vozNome)
     return r
   })
 
@@ -253,17 +261,33 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center">
-        <Button key="abrir" label="Painel" plain dimColor onPress={() => abrirPainel($)} />
-        <Text dimColor>│</Text>
-        <Button key="memoria" plain dimColor={!c.memoria} label={`${c.memoria ? '●' : '○'} Memória`} onPress={a.alternarMemoria} />
-        <Button key="claudemd" plain dimColor={!c.claudeMd} label={`${c.claudeMd ? '●' : '○'} CLAUDE.md`} onPress={a.alternarClaudeMd} />
-        <Text dimColor>│</Text>
-        <Button key="mcp" plain dimColor={ligadosMcp === 0} label={`MCP ${ligadosMcp}/${cat.servidores.length}`} onPress={() => abrirPainel($)} />
-        <Button key="skills" plain dimColor={marcadas.length === 0} label={`Skills ${marcadas.length}/${cat.skills.length}`} onPress={() => abrirPainel($)} />
-        <Text dimColor>│</Text>
-        <Button key="voz:auto" plain dimColor={!c.voz} label={`${c.voz ? '🔊' : '🔇'} Auto`} onPress={a.alternarAuto} />
-        <Button key="voz:caixa" plain label="▶ Ler caixa" onPress={a.lerCaixa} />
-        <Button key="voz:parar" plain dimColor label="■" onPress={() => parar($)} />
+        <Button key="abrir" plain onPress={() => abrirPainel($)}>
+          <Text color="claude" bold>Painel</Text>
+        </Button>
+        <Text color="subtle">│</Text>
+        <Button key="memoria" plain dimColor={!c.memoria} onPress={a.alternarMemoria}>
+          <Text color={c.memoria ? 'success' : 'inactive'}>{c.memoria ? '●' : '○'}</Text> Memória
+        </Button>
+        <Button key="claudemd" plain dimColor={!c.claudeMd} onPress={a.alternarClaudeMd}>
+          <Text color={c.claudeMd ? 'success' : 'inactive'}>{c.claudeMd ? '●' : '○'}</Text> CLAUDE.md
+        </Button>
+        <Text color="subtle">│</Text>
+        <Button key="mcp" plain dimColor={ligadosMcp === 0} onPress={() => abrirPainel($)}>
+          MCP <Text color={ligadosMcp > 0 ? 'success' : 'inactive'}>{ligadosMcp}</Text>/{cat.servidores.length}
+        </Button>
+        <Button key="skills" plain dimColor={marcadas.length === 0} onPress={() => abrirPainel($)}>
+          Skills <Text color={marcadas.length > 0 ? 'warning' : 'inactive'}>{marcadas.length}</Text>/{cat.skills.length}
+        </Button>
+        <Text color="subtle">│</Text>
+        <Button key="voz:auto" plain dimColor={!c.voz} onPress={a.alternarAuto}>
+          <Text color={c.voz ? 'success' : 'inactive'}>{c.voz ? '🔊' : '🔇'}</Text> Auto
+        </Button>
+        <Button key="voz:caixa" plain onPress={a.lerCaixa}>
+          <Text color="claude">▶</Text> Ler caixa
+        </Button>
+        <Button key="voz:parar" plain dimColor onPress={() => parar($)}>
+          <Text color="error">■</Text>
+        </Button>
         <Button key="ocultar" label="×" plain dimColor role="dismiss" onPress={() => update($, oculto, () => true)} />
       </Box>
     )
@@ -283,11 +307,14 @@ export const register: Register = on => {
       update($, skills, lista => (lista.includes(n) ? lista.filter(x => x !== n) : [...lista, n]))
 
     const item = (key: string, nome: string, marcado: boolean, onPress: () => unknown) => (
-      <Button key={key} plain dimColor={!marcado} label={`${marcado ? '●' : '○'} ${nome}`} onPress={onPress} />
+      <Button key={key} plain dimColor={!marcado} onPress={onPress}>
+        <Text color={marcado ? 'success' : 'inactive'}>{marcado ? '●' : '○'}</Text> {nome}
+      </Button>
     )
-    const titulo = (texto: string) => (
-      <Box marginTop={1}>
-        <Text bold>{texto}</Text>
+    const titulo = (texto: string, extra?: string) => (
+      <Box marginTop={1} columnGap={1}>
+        <Text color="claude" bold>{texto}</Text>
+        {extra !== undefined && <Text color="subtle">{extra}</Text>}
       </Box>
     )
 
@@ -299,7 +326,7 @@ export const register: Register = on => {
         {item('memoria', 'Memória automática', c.memoria, a.alternarMemoria)}
         {item('claudemd', 'CLAUDE.md e regras', c.claudeMd, a.alternarClaudeMd)}
 
-        {titulo(`Servidores MCP  ${c.mcpLigados.filter(s => cat.servidores.includes(s)).length}/${cat.servidores.length}`)}
+        {titulo('Servidores MCP', `${c.mcpLigados.filter(s => cat.servidores.includes(s)).length}/${cat.servidores.length}`)}
         <Text dimColor>desligado = schema fora do prompt e chamadas negadas</Text>
         {cat.servidores.length === 0 && <Text dimColor>nenhum servidor conectado ainda</Text>}
         {cat.servidores.map(s => item(`mcp:${s}`, s, c.mcpLigados.includes(s), () => alternarServidor(s)))}
@@ -311,11 +338,11 @@ export const register: Register = on => {
           </Box>
         )}
 
-        {titulo(`Skills  ${marcadas.length}/${cat.skills.length}`)}
+        {titulo('Skills', `${marcadas.length}/${cat.skills.length}`)}
         <Text dimColor>marcadas entram como instrucao no proximo pedido</Text>
         {marcadas.length > 0 && (
           <Box flexDirection="row" columnGap={1}>
-            <Text>{marcadas.join(', ')}</Text>
+            <Text color="warning">{marcadas.join(', ')}</Text>
             <Button key="limpar" plain dimColor label="limpar" onPress={() => update($, skills, () => [])} />
           </Box>
         )}
@@ -323,7 +350,7 @@ export const register: Register = on => {
         {grupos.map(g => (
           <Box key={`grupo:${g}`} flexDirection="column">
             <Box marginTop={1}>
-              <Text dimColor>{g}</Text>
+              <Text color="warning">{g}</Text>
             </Box>
             {cat.skills
               .filter(s => s.grupo === g)
@@ -333,19 +360,29 @@ export const register: Register = on => {
 
         {titulo('Leitura em voz alta')}
         {item('voz:auto', 'Ler cada resposta nova', c.voz, a.alternarAuto)}
-        <Button key="voz:caixa" plain label="▶ Ler o que está na caixa (cole o trecho e clique)" onPress={a.lerCaixa} />
-        <Button key="voz:ultima" plain label="▶ Ler a última resposta" onPress={a.lerUltima} />
-        <Button key="voz:parar" plain label="■ Parar" onPress={() => parar($)} />
+        <Button key="voz:caixa" plain onPress={a.lerCaixa}>
+          <Text color="claude">▶</Text> Ler o que está na caixa (cole o trecho e clique)
+        </Button>
+        <Button key="voz:ultima" plain onPress={a.lerUltima}>
+          <Text color="claude">▶</Text> Ler a última resposta
+        </Button>
+        <Button key="voz:parar" plain onPress={() => parar($)}>
+          <Text color="error">■</Text> Parar
+        </Button>
         <Box flexDirection="row" columnGap={2} marginTop={1}>
-          <Text dimColor>Velocidade</Text>
+          <Text color="subtle">Velocidade</Text>
           {VELOCIDADES.map(v => (
-            <Button
-              key={`vel:${v}`}
-              plain
-              dimColor={v !== c.velocidade}
-              label={`${v === c.velocidade ? '●' : '○'} ${v.toFixed(1)}x`}
-              onPress={() => salvar($, x => ({ ...x, velocidade: v }))}
-            />
+            <Button key={`vel:${v}`} plain dimColor={v !== c.velocidade} onPress={() => salvar($, x => ({ ...x, velocidade: v }))}>
+              <Text color={v === c.velocidade ? 'success' : 'inactive'}>{v === c.velocidade ? '●' : '○'}</Text> {v.toFixed(1)}x
+            </Button>
+          ))}
+        </Box>
+        <Box flexDirection="row" columnGap={2}>
+          <Text color="subtle">Voz</Text>
+          {VOZES.map(z => (
+            <Button key={`voz:nome:${z.id}`} plain dimColor={z.id !== c.vozNome} onPress={() => salvar($, x => ({ ...x, vozNome: z.id }))}>
+              <Text color={z.id === c.vozNome ? 'success' : 'inactive'}>{z.id === c.vozNome ? '●' : '○'}</Text> {z.nome}
+            </Button>
           ))}
         </Box>
       </Box>

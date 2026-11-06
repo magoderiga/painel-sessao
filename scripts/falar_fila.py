@@ -22,7 +22,8 @@ from pathlib import Path
 PASTA = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "painel-sessao"
 PID = PASTA / "voz.pid"
 ESTADO = PASTA / "voz.json"
-VOZ_PADRAO = "pt-BR-ThalitaMultilingualNeural"
+# Voz fixa em pt-BR: a "Multilingual" detecta idioma por trecho e escorrega para espanhol.
+VOZ_PADRAO = "pt-BR-FranciscaNeural"
 MAX_FRASE = 260  # chars por trecho de audio
 
 

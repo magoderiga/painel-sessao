@@ -203,14 +203,20 @@ test('voz: ler a caixa fala o trecho colado sem enviar; velocidade; parar', asyn
   setCaixa('Só este trecho aqui.')
   await faixa.press({ key: 'voz:caixa' })
   expect(processos.length).toBe(1)
-  expect(processos[0]!.argv.join(' ')).toMatch(/falar_fila\.py falar --rate \+0%$/)
+  expect(processos[0]!.argv.join(' ')).toMatch(/falar_fila\.py falar --rate \+0% --voz pt-BR-FranciscaNeural$/)
   expect(processos[0]!.stdin).toBe('Só este trecho aqui.')
 
   const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await pane.press({ key: 'vel:1.5' })
   setCaixa('Mais rápido.')
   await faixa.press({ key: 'voz:caixa' })
-  expect(processos[1]!.argv.join(' ')).toMatch(/--rate \+50%$/)
+  expect(processos[1]!.argv.join(' ')).toMatch(/--rate \+50% --voz pt-BR-FranciscaNeural$/)
+
+  // trocar a voz no painel muda o --voz da proxima fala
+  await pane.press({ key: 'voz:nome:pt-BR-AntonioNeural' })
+  setCaixa('Com outra voz.')
+  await faixa.press({ key: 'voz:caixa' })
+  expect(processos[2]!.argv.join(' ')).toMatch(/--rate \+50% --voz pt-BR-AntonioNeural$/)
 
   await faixa.press({ key: 'voz:parar' })
   expect(processos[processos.length - 1]!.argv.join(' ')).toMatch(/falar_fila\.py parar$/)

@@ -4,6 +4,7 @@ export type Config = {
   mcpLigados: string[]
   voz: boolean
   velocidade: number
+  vozNome: string
 }
 
 export type SkillInfo = { name: string; description: string; grupo: string }
